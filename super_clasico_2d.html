@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Clasico 2D - Real vs Barca</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* Dark gray/black background */
+            color: white;
+            margin: 0;
+            overflow: hidden; /* Ngăn cuộn trang */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #scoreboard {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background: #1f2937;
+            border-radius: 8px 8px 0 0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+        }
+
+        .team-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: 900;
+            font-size: 1.2rem;
+            border: 2px solid white;
+        }
+
+        .real-logo { background-color: white; color: black; }
+        .barca-logo { 
+            background: linear-gradient(90deg, #004d98 50%, #a50044 50%); 
+            color: white; 
+            border-color: #edbb00;
+        }
+
+        .score-text {
+            font-size: 2.5rem;
+            font-weight: 900;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #game-container {
+            position: relative;
+            width: 1200px;
+            height: 700px;
+            background-color: #2e8b57; /* Màu nền cỏ dự phòng */
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            border-radius: 0 0 8px 8px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .controls-hint {
+            margin-top: 15px;
+            display: flex;
+            gap: 40px;
+            color: #9ca3af;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="multiplayer-ui" class="w-full max-w-[1200px] bg-gray-800 p-3 flex justify-between items-center text-sm mb-2 rounded border border-gray-700">
+        <div class="flex items-center gap-2">
+            <span class="text-gray-300">ID Phòng của bạn:</span>
+            <span id="hostIdDisplay" class="text-yellow-400 font-bold select-all cursor-pointer">Đang tạo...</span>
+        </div>
+        <div id="statusDisplay" class="text-gray-400 font-bold">Chờ đối thủ kết nối... (Bạn là Real)</div>
+        <div class="flex items-center gap-2">
+            <input id="joinIdInput" type="text" placeholder="Nhập ID phòng bạn bè..." class="text-black px-2 py-1.5 rounded w-48">
+            <button id="btnJoin" class="bg-red-600 hover:bg-red-500 px-4 py-1.5 rounded font-bold transition">Vào phòng (Barca)</button>
+        </div>
+    </div>
+
+    <div id="scoreboard">
+        <div class="team-info">
+            <div class="logo real-logo">RM</div>
+            <div class="text-2xl font-bold">REAL MADRID</div>
+            <div class="score-text" id="score1">0</div>
+        </div>
+        <div class="text-gray-400 font-bold text-xl">TIME <span id="timeDisplay" class="text-white">00:00</span></div>
+        <div class="team-info">
+            <div class="score-text" id="score2">0</div>
+            <div class="text-2xl font-bold">BARCELONA</div>
+            <div class="logo barca-logo">FCB</div>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="1200" height="700"></canvas>
+    </div>
+
+    <div class="controls-hint">
+        <div><strong>Điều khiển (Cả 2 người đều dùng chung bộ phím):</strong> Di chuyển: W,A,S,D hoặc Mũi tên | Chuyền: J | Sút: K | Chạy nhanh: L</div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // === MULTIPLAYER & PEERJS SETUP ===
+    let peer = new Peer();
+    let conn = null;
+    let isHost = true; // Mặc định người mở web đầu tiên là Host
+    let isClient = false;
+    let pendingAudio = null;
+
+    peer.on('open', id => {
+        document.getElementById('hostIdDisplay').innerText = id;
+    });
+
+    // Khi có người kết nối tới MÁY CỦA MÌNH (Mình là Host)
+    peer.on('connection', connection => {
+        if (isClient) return; // Nếu mình đang đi làm khách thì từ chối
+        conn = connection;
+        setupConnection();
+        document.getElementById('statusDisplay').innerText = "Đối thủ đã vào! Trận đấu bắt đầu.";
+        document.getElementById('statusDisplay').className = "text-green-400 font-bold";
+    });
+
+    // Khi mình BẤM NÚT VÀO PHÒNG người khác (Mình là Client)
+    document.getElementById('btnJoin').addEventListener('click', () => {
+        const id = document.getElementById('joinIdInput').value.trim();
+        if(!id) return;
+        isHost = false; // Ngừng làm Host
+        isClient = true;
+        document.getElementById('statusDisplay').innerText = "Đang kết nối...";
+        conn = peer.connect(id);
+        setupConnection();
+    });
+
+    function setupConnection() {
+        conn.on('open', () => {
+            if (isClient) {
+                document.getElementById('statusDisplay').innerText = "Đã kết nối! Bạn điều khiển BARCELONA.";
+                document.getElementById('statusDisplay').className = "text-green-400 font-bold";
+            }
+        });
+
+        conn.on('data', data => {
+            // Nhận phím bấm từ Barca
+            if (isHost && data.type === 'input') remoteKeys = data.keys;
+            
+            // Nhận hình ảnh và âm thanh từ Real Madrid
+            if (isClient && data.type === 'state') renderState(data);
+        });
+
+        conn.on('close', () => {
+            document.getElementById('statusDisplay').innerText = "Mất kết nối!";
+            document.getElementById('statusDisplay').className = "text-red-500 font-bold";
+        });
+    }
+
+    // === AUDIO SETUP ===
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    window.addEventListener('keydown', () => { 
+        if (audioCtx.state === 'suspended') audioCtx.resume(); 
+    }, {once: true});
+
+    function playKickSound() {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.start(audioCtx.currentTime);
+        osc.stop(audioCtx.currentTime + 0.1);
+    }
+
+    function playCheerSound() {
+        if (!audioCtx) return;
+        const bufferSize = audioCtx.sampleRate * 2; 
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+        const bandpass = audioCtx.createBiquadFilter();
+        bandpass.type = 'bandpass';
+        bandpass.frequency.value = 1000;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.5);
+        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 2);
+        noise.connect(bandpass);
+        bandpass.connect(gain);
+        gain.connect(audioCtx.destination);
+        noise.start();
+    }
+
+    // === CONFIGURATION ===
+    const CW = canvas.width;
+    const CH = canvas.height;
+    
+    const FIELD_MARGIN = 45;
+    const FIELD_LEFT = FIELD_MARGIN;
+    const FIELD_RIGHT = CW - FIELD_MARGIN;
+    const FIELD_TOP = 20;
+    const FIELD_BOTTOM = CH - 20;
+
+    const GOAL_WIDTH = 140;
+    const GOAL_Y = (CH - GOAL_WIDTH) / 2;
+    const GOAL_DEPTH = 45;
+
+    let score = { t1: 0, t2: 0 };
+    let gameState = 'PLAYING';
+    let gameTime = 0; 
+
+    // === THU THẬP PHÍM BẤM ===
+    let localKeys = { up: false, down: false, left: false, right: false, pass: false, shoot: false, sprint: false };
+    let remoteKeys = { up: false, down: false, left: false, right: false, pass: false, shoot: false, sprint: false };
+
+    window.addEventListener('keydown', e => updateKeys(e.code, true));
+    window.addEventListener('keyup', e => updateKeys(e.code, false));
+
+    function updateKeys(code, isPressed) {
+        let changed = false;
+        if(code === 'KeyW' || code === 'ArrowUp') { localKeys.up = isPressed; changed = true; }
+        if(code === 'KeyS' || code === 'ArrowDown') { localKeys.down = isPressed; changed = true; }
+        if(code === 'KeyA' || code === 'ArrowLeft') { localKeys.left = isPressed; changed = true; }
+        if(code === 'KeyD' || code === 'ArrowRight') { localKeys.right = isPressed; changed = true; }
+        if(code === 'KeyJ') { localKeys.pass = isPressed; changed = true; }
+        if(code === 'KeyK') { localKeys.shoot = isPressed; changed = true; }
+        if(code === 'KeyL') { localKeys.sprint = isPressed; changed = true; }
+
+        // Nếu là khách, liên tục gửi phím lên Host
+        if (changed && isClient && conn && conn.open) {
+            conn.send({ type: 'input', keys: localKeys });
+        }
+    }
+
+    // === CLASSES ===
+    class Ball {
+        constructor() {
+            this.radius = 6;
+            this.owner = null; 
+            this.reset();
+        }
+
+        reset() {
+            this.x = CW / 2;
+            this.y = CH / 2;
+            this.vx = 0;
+            this.vy = 0;
+            this.friction = 0.96;
+            this.owner = null;
+        }
+
+        update() {
+            if (this.owner) {
+                let offset = this.owner.radius + this.radius + 4;
+                this.x = this.owner.x + this.owner.faceX * offset;
+                this.y = this.owner.y + this.owner.faceY * offset;
+                this.vx = 0;
+                this.vy = 0;
+                return; 
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vx *= this.friction;
+            this.vy *= this.friction;
+
+            if (this.y - this.radius < FIELD_TOP) {
+                this.y = FIELD_TOP + this.radius;
+                this.vy *= -0.8;
+            } else if (this.y + this.radius > FIELD_BOTTOM) {
+                this.y = FIELD_BOTTOM - this.radius;
+                this.vy *= -0.8;
+            }
+
+            if (this.x - this.radius < FIELD_LEFT) {
+                if (this.y > GOAL_Y && this.y < GOAL_Y + GOAL_WIDTH) {
+                    if (this.x - this.radius < FIELD_LEFT - GOAL_DEPTH) {
+                        this.x = FIELD_LEFT - GOAL_DEPTH + this.radius;
+                        this.vx *= -0.5;
+                    }
+                    if (gameState === 'PLAYING' && this.x < FIELD_LEFT - 5) scoreGoal(2);
+                } else {
+                    this.x = FIELD_LEFT + this.radius;
+                    this.vx *= -0.8;
+                }
+            } else if (this.x + this.radius > FIELD_RIGHT) {
+                if (this.y > GOAL_Y && this.y < GOAL_Y + GOAL_WIDTH) {
+                    if (this.x + this.radius > FIELD_RIGHT + GOAL_DEPTH) {
+                        this.x = FIELD_RIGHT + GOAL_DEPTH - this.radius;
+                        this.vx *= -0.5;
+                    }
+                    if (gameState === 'PLAYING' && this.x > FIELD_RIGHT + 5) scoreGoal(1);
+                } else {
+                    this.x = FIELD_RIGHT - this.radius;
+                    this.vx *= -0.8;
+                }
+            }
+        }
+
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius/2, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    class Player {
+        constructor(id, team, number, baseX, baseY) {
+            this.id = id;
+            this.team = team; 
+            this.number = number;
+            this.baseX = baseX; 
+            this.baseY = baseY; 
+            this.radius = 12;
+            
+            this.faceX = team === 1 ? 1 : -1;
+            this.faceY = 0;
+            this.stealCooldown = 0; 
+
+            this.vx = 0;
+            this.vy = 0;
+            this.speed = 3;
+            this.sprintSpeed = 5.5;
+            this.friction = 0.85;
+            
+            this.passCooldown = 0;
+            this.shootCooldown = 0;
+
+            this.reset();
+        }
+
+        reset() {
+            this.x = FIELD_LEFT + this.baseX * (FIELD_RIGHT - FIELD_LEFT);
+            this.y = FIELD_TOP + this.baseY * (FIELD_BOTTOM - FIELD_TOP);
+            this.vx = 0;
+            this.vy = 0;
+            this.faceX = this.team === 1 ? 1 : -1;
+            this.faceY = 0;
+            this.stealCooldown = 0;
+        }
+
+        update(isActive, ball, teammates, inputKeys) {
+            if (this.stealCooldown > 0) this.stealCooldown--;
+            if (this.passCooldown > 0) this.passCooldown--;
+            if (this.shootCooldown > 0) this.shootCooldown--;
+
+            let currentSpeed = this.speed;
+            let moveX = 0;
+            let moveY = 0;
+
+            if (isActive && gameState === 'PLAYING') {
+                if (inputKeys.sprint) currentSpeed = this.sprintSpeed;
+
+                if (inputKeys.up) moveY -= 1;
+                if (inputKeys.down) moveY += 1;
+                if (inputKeys.left) moveX -= 1;
+                if (inputKeys.right) moveX += 1;
+
+                if (moveX !== 0 || moveY !== 0) {
+                    let len = Math.hypot(moveX, moveY);
+                    this.faceX = moveX / len;
+                    this.faceY = moveY / len;
+                }
+
+                if (ball.owner === this) {
+                    if (inputKeys.pass && this.passCooldown === 0) {
+                        this.executePass(ball);
+                        this.passCooldown = 20; 
+                    } else if (inputKeys.shoot && this.shootCooldown === 0) {
+                        this.executeShoot(ball);
+                        this.shootCooldown = 20;
+                    }
+                }
+
+            } else {
+                let targetX = FIELD_LEFT + this.baseX * (FIELD_RIGHT - FIELD_LEFT);
+                let targetY = FIELD_TOP + this.baseY * (FIELD_BOTTOM - FIELD_TOP);
+
+                if (this.number === 1) { 
+                    targetY = Math.max(GOAL_Y + 10, Math.min(GOAL_Y + GOAL_WIDTH - 10, ball.y)); 
+                    targetX = this.team === 1 ? FIELD_LEFT + 20 : FIELD_RIGHT - 20;
+                } else {
+                    let ballShiftX = (ball.x - CW/2) * 0.3; 
+                    let ballShiftY = (ball.y - CH/2) * 0.3;
+                    targetX += ballShiftX;
+                    targetY += ballShiftY;
+                }
+
+                let dx = targetX - this.x;
+                let dy = targetY - this.y;
+                let dist = Math.hypot(dx, dy);
+                if (dist > 10) {
+                    moveX = dx / dist;
+                    moveY = dy / dist;
+                    currentSpeed = 1.5; 
+                    this.faceX = moveX; 
+                    this.faceY = moveY;
+                }
+            }
+
+            if (moveX !== 0 && moveY !== 0) {
+                let length = Math.hypot(moveX, moveY);
+                moveX /= length;
+                moveY /= length;
+            }
+
+            this.vx += moveX * currentSpeed * 0.2;
+            this.vy += moveY * currentSpeed * 0.2;
+
+            let vLen = Math.hypot(this.vx, this.vy);
+            if (vLen > currentSpeed) {
+                this.vx = (this.vx / vLen) * currentSpeed;
+                this.vy = (this.vy / vLen) * currentSpeed;
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vx *= this.friction;
+            this.vy *= this.friction;
+
+            if (this.x < FIELD_LEFT + this.radius) this.x = FIELD_LEFT + this.radius;
+            if (this.x > FIELD_RIGHT - this.radius) this.x = FIELD_RIGHT - this.radius;
+            if (this.y < FIELD_TOP + this.radius) this.y = FIELD_TOP + this.radius;
+            if (this.y > FIELD_BOTTOM - this.radius) this.y = FIELD_BOTTOM - this.radius;
+
+            // Xử lý giữ và cướp bóng
+            if (gameState === 'PLAYING') {
+                if (!ball.owner && this.stealCooldown === 0) {
+                    if (Math.hypot(ball.x - this.x, ball.y - this.y) < this.radius + ball.radius + 10) {
+                        ball.owner = this;
+                        if(isHost) { playKickSound(); pendingAudio = 'kick'; }
+                    }
+                } else if (ball.owner && ball.owner.team !== this.team && this.stealCooldown === 0) {
+                    if (Math.hypot(ball.owner.x - this.x, ball.owner.y - this.y) < this.radius + ball.owner.radius + 2) {
+                        ball.owner.stealCooldown = 30; 
+                        ball.owner = this;
+                        if(isHost) { playKickSound(); pendingAudio = 'kick'; }
+                    }
+                }
+            }
+        }
+
+        executePass(ball) {
+            ball.owner = null;
+            this.stealCooldown = 15;
+            ball.vx = this.faceX * 18; 
+            ball.vy = this.faceY * 18;
+            if(isHost) { playKickSound(); pendingAudio = 'kick'; }
+        }
+
+        executeShoot(ball) {
+            ball.owner = null;
+            this.stealCooldown = 15;
+            ball.vx = this.faceX * 28; 
+            ball.vy = this.faceY * 28;
+            if(isHost) { playKickSound(); pendingAudio = 'kick'; }
+        }
+
+        draw(isActive) {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+
+            if (isActive) {
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius + 6, 0, Math.PI * 2);
+                ctx.strokeStyle = this.team === 1 ? 'rgba(255, 255, 255, 0.7)' : 'rgba(255, 200, 0, 0.7)';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+
+            if (this.team === 1) {
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.fillStyle = 'black';
+            } else {
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, Math.PI / 2, Math.PI * 1.5);
+                ctx.fillStyle = '#004d98';
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, Math.PI * 1.5, Math.PI / 2);
+                ctx.fillStyle = '#a50044';
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = '#edbb00';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                ctx.fillStyle = 'white';
+            }
+
+            ctx.font = "11px Inter";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(this.number, 0, 1); 
+
+            if (isActive || ball.owner === this) {
+                ctx.beginPath();
+                ctx.moveTo(this.faceX * (this.radius + 2), this.faceY * (this.radius + 2));
+                ctx.lineTo(this.faceX * (this.radius + 8), this.faceY * (this.radius + 8));
+                ctx.strokeStyle = '#facc15'; 
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+    }
+
+    // === GAME SETUP ===
+    const ball = new Ball();
+    const team1 = []; 
+    const team2 = []; 
+
+    const formation1 = [
+        {n:1, x:0.05, y:0.5}, {n:2, x:0.25, y:0.2}, {n:3, x:0.2, y:0.4}, {n:4, x:0.2, y:0.6},
+        {n:5, x:0.25, y:0.8}, {n:6, x:0.4, y:0.3}, {n:8, x:0.35, y:0.5}, {n:10, x:0.4, y:0.7},
+        {n:7, x:0.6, y:0.2}, {n:9, x:0.65, y:0.5}, {n:11, x:0.6, y:0.8}
+    ];
+
+    const formation2 = [
+        {n:1, x:0.95, y:0.5}, {n:2, x:0.75, y:0.2}, {n:3, x:0.8, y:0.4}, {n:4, x:0.8, y:0.6},
+        {n:5, x:0.75, y:0.8}, {n:6, x:0.6, y:0.3}, {n:8, x:0.65, y:0.5}, {n:10, x:0.6, y:0.7},
+        {n:7, x:0.4, y:0.2}, {n:9, x:0.35, y:0.5}, {n:11, x:0.4, y:0.8}
+    ];
+
+    formation1.forEach((p, i) => team1.push(new Player(i, 1, p.n, p.x, p.y)));
+    formation2.forEach((p, i) => team2.push(new Player(i, 2, p.n, p.x, p.y)));
+
+    let activePlayer1 = team1[9]; 
+    let activePlayer2 = team2[9]; 
+
+    function findClosestPlayerToBall(teamArr) {
+        let closest = teamArr[0];
+        let minDist = Infinity;
+        for (let p of teamArr) {
+            let d = Math.hypot(p.x - ball.x, p.y - ball.y);
+            if (d < minDist) {
+                minDist = d;
+                closest = p;
+            }
+        }
+        return closest;
+    }
+
+    function resetPositions() {
+        ball.reset();
+        team1.forEach(p => p.reset());
+        team2.forEach(p => p.reset());
+        activePlayer1 = findClosestPlayerToBall(team1);
+        activePlayer2 = findClosestPlayerToBall(team2);
+        gameState = 'PLAYING';
+    }
+
+    function scoreGoal(teamIndex) {
+        gameState = 'GOAL_SCORED';
+        if (teamIndex === 1) score.t1++;
+        else score.t2++;
+        
+        if (isHost) {
+            playCheerSound();
+            pendingAudio = 'cheer';
+        }
+        setTimeout(resetPositions, 2000);
+    }
+
+    // === DRAWING FUNCTIONS ===
+    function drawPitch() {
+        ctx.fillStyle = '#2e8b57';
+        ctx.fillRect(0, 0, CW, CH);
+
+        const stripeWidth = 60;
+        for (let i = FIELD_LEFT; i < FIELD_RIGHT; i += stripeWidth) {
+            let width = Math.min(stripeWidth, FIELD_RIGHT - i);
+            ctx.fillStyle = ((i - FIELD_LEFT) / stripeWidth) % 2 === 0 ? '#2e8b57' : '#297d4e';
+            ctx.fillRect(i, FIELD_TOP, width, FIELD_BOTTOM - FIELD_TOP);
+        }
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(FIELD_LEFT, FIELD_TOP, FIELD_RIGHT - FIELD_LEFT, FIELD_BOTTOM - FIELD_TOP);
+
+        ctx.beginPath(); ctx.arc(CW / 2, CH / 2, 70, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(CW / 2, FIELD_TOP); ctx.lineTo(CW / 2, FIELD_BOTTOM); ctx.stroke();
+        ctx.beginPath(); ctx.arc(CW / 2, CH / 2, 4, 0, Math.PI * 2); ctx.fillStyle = 'white'; ctx.fill();
+
+        ctx.strokeRect(FIELD_LEFT, CH/2 - 150, 120, 300);
+        ctx.strokeRect(FIELD_LEFT, CH/2 - 60, 40, 120);
+        ctx.beginPath(); ctx.arc(FIELD_LEFT + 120, CH/2, 60, -Math.PI/3.5, Math.PI/3.5); ctx.stroke();
+
+        ctx.strokeRect(FIELD_RIGHT - 120, CH/2 - 150, 120, 300);
+        ctx.strokeRect(FIELD_RIGHT - 40, CH/2 - 60, 40, 120);
+        ctx.beginPath(); ctx.arc(FIELD_RIGHT - 120, CH/2, 60, Math.PI - Math.PI/3.5, Math.PI + Math.PI/3.5); ctx.stroke();
+
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(FIELD_LEFT, GOAL_Y); ctx.lineTo(FIELD_LEFT - GOAL_DEPTH, GOAL_Y);
+        ctx.lineTo(FIELD_LEFT - GOAL_DEPTH, GOAL_Y + GOAL_WIDTH); ctx.lineTo(FIELD_LEFT, GOAL_Y + GOAL_WIDTH); ctx.stroke();
+        
+        ctx.save(); ctx.beginPath(); ctx.rect(FIELD_LEFT - GOAL_DEPTH, GOAL_Y, GOAL_DEPTH, GOAL_WIDTH); ctx.clip();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; ctx.lineWidth = 1;
+        for (let i = 0; i < GOAL_WIDTH; i += 8) { ctx.moveTo(FIELD_LEFT - GOAL_DEPTH, GOAL_Y + i); ctx.lineTo(FIELD_LEFT, GOAL_Y + i); }
+        for (let i = 0; i < GOAL_DEPTH; i += 8) { ctx.moveTo(FIELD_LEFT - i, GOAL_Y); ctx.lineTo(FIELD_LEFT - i, GOAL_Y + GOAL_WIDTH); }
+        ctx.stroke(); ctx.restore();
+
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(FIELD_RIGHT, GOAL_Y); ctx.lineTo(FIELD_RIGHT + GOAL_DEPTH, GOAL_Y);
+        ctx.lineTo(FIELD_RIGHT + GOAL_DEPTH, GOAL_Y + GOAL_WIDTH); ctx.lineTo(FIELD_RIGHT, GOAL_Y + GOAL_WIDTH); ctx.stroke();
+        
+        ctx.save(); ctx.beginPath(); ctx.rect(FIELD_RIGHT, GOAL_Y, GOAL_DEPTH, GOAL_WIDTH); ctx.clip();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; ctx.lineWidth = 1;
+        for (let i = 0; i < GOAL_WIDTH; i += 8) { ctx.moveTo(FIELD_RIGHT, GOAL_Y + i); ctx.lineTo(FIELD_RIGHT + GOAL_DEPTH, GOAL_Y + i); }
+        for (let i = 0; i < GOAL_DEPTH; i += 8) { ctx.moveTo(FIELD_RIGHT + i, GOAL_Y); ctx.lineTo(FIELD_RIGHT + i, GOAL_Y + GOAL_WIDTH); }
+        ctx.stroke(); ctx.restore();
+    }
+
+    // === HÀM VẼ GIAO DIỆN (CHUNG CHO CẢ HOST & CLIENT) ===
+    function renderState(state) {
+        document.getElementById('score1').innerText = state.score.t1;
+        document.getElementById('score2').innerText = state.score.t2;
+        document.getElementById('timeDisplay').innerText = state.time;
+
+        ctx.clearRect(0, 0, CW, CH);
+        drawPitch();
+
+        // Gán tạm vị trí cho các vật thể để gọi hàm vẽ
+        ball.x = state.ball.x;
+        ball.y = state.ball.y;
+        ball.owner = null;
+
+        for (let i = 0; i < team1.length; i++) {
+            team1[i].x = state.t1[i].x; team1[i].y = state.t1[i].y;
+            team1[i].faceX = state.t1[i].faceX; team1[i].faceY = state.t1[i].faceY;
+            if (state.ball.ownerTeam === 1 && state.ball.ownerId === i) ball.owner = team1[i];
+            team1[i].draw(state.t1[i].active);
+        }
+
+        for (let i = 0; i < team2.length; i++) {
+            team2[i].x = state.t2[i].x; team2[i].y = state.t2[i].y;
+            team2[i].faceX = state.t2[i].faceX; team2[i].faceY = state.t2[i].faceY;
+            if (state.ball.ownerTeam === 2 && state.ball.ownerId === i) ball.owner = team2[i];
+            team2[i].draw(state.t2[i].active);
+        }
+
+        ball.draw();
+
+        if (state.gameState === 'GOAL_SCORED') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, CW, CH);
+            ctx.font = "80px Inter";
+            ctx.fillStyle = "white";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("VÀOOOOO !!!", CW/2, CH/2);
+        }
+
+        // Kích hoạt âm thanh trên máy Client
+        if (state.audio === 'kick') playKickSound();
+        if (state.audio === 'cheer') playCheerSound();
+    }
+
+    // === GAME LOOP (CHỈ CHẠY TRÊN MÁY HOST) ===
+    let lastTime = 0;
+    function gameLoop(timestamp) {
+        if (!isHost) return; // Nếu là Client, ngắt gameLoop và chỉ chờ renderState()
+
+        if (!lastTime) lastTime = timestamp;
+        if (gameState === 'PLAYING') {
+            if (timestamp - lastTime > 1000) {
+                gameTime++;
+                lastTime = timestamp;
+                let m = Math.floor(gameTime / 60).toString().padStart(2, '0');
+                let s = (gameTime % 60).toString().padStart(2, '0');
+                document.getElementById('timeDisplay').innerText = `${m}:${s}`;
+            }
+        }
+
+        if (gameState === 'PLAYING') {
+            activePlayer1 = findClosestPlayerToBall(team1);
+            activePlayer2 = findClosestPlayerToBall(team2);
+        }
+
+        // Cập nhật vật lý (Real dùng phím của mình, Barca dùng phím nhận qua mạng)
+        ball.update();
+        team1.forEach(p => p.update(p === activePlayer1, ball, team1, localKeys));
+        team2.forEach(p => p.update(p === activePlayer2, ball, team2, remoteKeys));
+
+        // Xử lý va chạm cầu thủ với cầu thủ
+        let allPlayers = [...team1, ...team2];
+        for (let i = 0; i < allPlayers.length; i++) {
+            for (let j = i + 1; j < allPlayers.length; j++) {
+                let p1 = allPlayers[i];
+                let p2 = allPlayers[j];
+                let dx = p2.x - p1.x; let dy = p2.y - p1.y;
+                let dist = Math.hypot(dx, dy);
+                if (dist < p1.radius + p2.radius) {
+                    let overlap = (p1.radius + p2.radius) - dist;
+                    let nx = dx / dist; let ny = dy / dist;
+                    p1.x -= nx * overlap / 2; p1.y -= ny * overlap / 2;
+                    p2.x += nx * overlap / 2; p2.y += ny * overlap / 2;
+                }
+            }
+        }
+
+        // Đóng gói trạng thái game để gửi đi
+        let ownerTeam = null, ownerId = null;
+        if (ball.owner) {
+            ownerTeam = ball.owner.team;
+            if (ownerTeam === 1) ownerId = team1.indexOf(ball.owner);
+            else ownerId = team2.indexOf(ball.owner);
+        }
+
+        let state = {
+            type: 'state',
+            ball: { x: ball.x, y: ball.y, ownerTeam, ownerId },
+            t1: team1.map(p => ({ x: p.x, y: p.y, faceX: p.faceX, faceY: p.faceY, active: p === activePlayer1 })),
+            t2: team2.map(p => ({ x: p.x, y: p.y, faceX: p.faceX, faceY: p.faceY, active: p === activePlayer2 })),
+            score: score,
+            time: document.getElementById('timeDisplay').innerText,
+            gameState: gameState,
+            audio: pendingAudio
+        };
+        pendingAudio = null; // Xóa cờ âm thanh sau khi gửi
+
+        // Gửi dữ liệu cho Barca
+        if (conn && conn.open) conn.send(state);
+
+        // Tự render cho màn hình của mình
+        renderState(state);
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Vẽ sân lần đầu và khởi động máy chủ
+    drawPitch();
+    requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
